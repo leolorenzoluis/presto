@@ -21,6 +21,7 @@ import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.tree.ExistsPredicate;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.FunctionCall;
+import com.facebook.presto.sql.tree.GroupingOperation;
 import com.facebook.presto.sql.tree.Identifier;
 import com.facebook.presto.sql.tree.InPredicate;
 import com.facebook.presto.sql.tree.Join;
@@ -47,14 +48,15 @@ import javax.annotation.concurrent.Immutable;
 import java.util.ArrayDeque;
 import java.util.Collection;
 import java.util.Deque;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static java.util.Collections.emptyList;
 import static java.util.Collections.newSetFromMap;
+import static java.util.Collections.unmodifiableList;
 import static java.util.Collections.unmodifiableMap;
 import static java.util.Collections.unmodifiableSet;
 import static java.util.Objects.requireNonNull;
@@ -68,7 +70,7 @@ public class Analysis
     private final IdentityLinkedHashMap<Table, Query> namedQueries = new IdentityLinkedHashMap<>();
 
     private final IdentityLinkedHashMap<Node, Scope> scopes = new IdentityLinkedHashMap<>();
-    private final IdentityHashMap<Expression, FieldId> columnReferences = new IdentityHashMap<>();
+    private final IdentityLinkedHashMap<Expression, FieldId> columnReferences = new IdentityLinkedHashMap<>();
 
     private final IdentityLinkedHashMap<QuerySpecification, List<FunctionCall>> aggregates = new IdentityLinkedHashMap<>();
     private final IdentityLinkedHashMap<OrderBy, List<Expression>> orderByAggregates = new IdentityLinkedHashMap<>();
@@ -98,6 +100,8 @@ public class Analysis
     private final IdentityLinkedHashMap<Field, ColumnHandle> columns = new IdentityLinkedHashMap<>();
 
     private final IdentityLinkedHashMap<SampledRelation, Double> sampleRatios = new IdentityLinkedHashMap<>();
+
+    private final IdentityLinkedHashMap<QuerySpecification, List<GroupingOperation>> groupingOperations = new IdentityLinkedHashMap<>();
 
     // for create table
     private Optional<QualifiedObjectName> createTableDestination = Optional.empty();
@@ -527,6 +531,21 @@ public class Analysis
     {
         Preconditions.checkState(sampleRatios.containsKey(relation), "Sample ratio missing for %s. Broken analysis?", relation);
         return sampleRatios.get(relation);
+    }
+
+    public void setGroupingOperations(QuerySpecification querySpecification, List<GroupingOperation> groupingOperations)
+    {
+        this.groupingOperations.put(querySpecification, groupingOperations);
+    }
+
+    public List<GroupingOperation> getGroupingOperations(QuerySpecification querySpecification)
+    {
+        if (groupingOperations.containsKey(querySpecification)) {
+            return unmodifiableList(groupingOperations.get(querySpecification));
+        }
+        else {
+            return emptyList();
+        }
     }
 
     public List<Expression> getParameters()
