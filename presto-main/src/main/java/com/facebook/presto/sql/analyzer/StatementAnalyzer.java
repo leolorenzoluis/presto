@@ -145,6 +145,7 @@ import static com.facebook.presto.sql.analyzer.AggregationAnalyzer.verifyOrderBy
 import static com.facebook.presto.sql.analyzer.AggregationAnalyzer.verifySourceAggregations;
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.createConstantAnalyzer;
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypes;
+import static com.facebook.presto.sql.analyzer.ExpressionTreeUtils.getAggregateExtractorFunction;
 import static com.facebook.presto.sql.analyzer.ScopeReferenceExtractor.hasReferencesToScope;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.AMBIGUOUS_ATTRIBUTE;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.COLUMN_NAME_NOT_SPECIFIED;
@@ -1187,14 +1188,11 @@ class StatementAnalyzer
 
         private List<FunctionCall> analyzeWindowFunctions(QuerySpecification node, List<Expression> expressions)
         {
-            WindowFunctionExtractor extractor = new WindowFunctionExtractor();
-
             for (Expression expression : expressions) {
-                extractor.process(expression, null);
                 new WindowFunctionValidator().process(expression, analysis);
             }
 
-            List<FunctionCall> windowFunctions = extractor.getWindowFunctions();
+            List<FunctionCall> windowFunctions = ExpressionTreeUtils.extractExpressionsOfTypeUsingPredicate(expressions, FunctionCall.class, ExpressionTreeUtils::isWindowFunction);
 
             for (FunctionCall windowFunction : windowFunctions) {
                 // filter with window function is not supported yet
@@ -1204,24 +1202,18 @@ class StatementAnalyzer
 
                 Window window = windowFunction.getWindow().get();
 
-                WindowFunctionExtractor nestedExtractor = new WindowFunctionExtractor();
-                for (Expression argument : windowFunction.getArguments()) {
-                    nestedExtractor.process(argument, null);
-                }
+                ImmutableList.Builder<Node> toExtract = ImmutableList.builder();
+                toExtract.addAll(windowFunction.getArguments());
+                toExtract.addAll(window.getPartitionBy());
+                window.getOrderBy().ifPresent(orderBy -> toExtract.addAll(orderBy.getSortItems()));
+                window.getFrame().ifPresent(toExtract::add);
 
-                for (Expression expression : window.getPartitionBy()) {
-                    nestedExtractor.process(expression, null);
-                }
+                List<FunctionCall> nestedWindowFunctions = ExpressionTreeUtils.extractExpressionsOfTypeUsingPredicate(
+                        toExtract.build(),
+                        FunctionCall.class,
+                        ExpressionTreeUtils::isWindowFunction);
 
-                if (window.getOrderBy().isPresent()) {
-                    nestedExtractor.process(window.getOrderBy().get(), null);
-                }
-
-                if (window.getFrame().isPresent()) {
-                    nestedExtractor.process(window.getFrame().get(), null);
-                }
-
-                if (!nestedExtractor.getWindowFunctions().isEmpty()) {
+                if (!nestedWindowFunctions.isEmpty()) {
                     throw new SemanticException(NESTED_WINDOW, node, "Cannot nest window functions inside window function '%s': %s",
                             windowFunction,
                             windowFunctions);
@@ -1710,11 +1702,11 @@ class StatementAnalyzer
         {
             checkState(orderByExpressions.isEmpty() || orderByScope.isPresent(), "non-empty orderByExpressions list without orderByScope provided");
 
-            AggregateExtractor extractor = new AggregateExtractor(metadata.getFunctionRegistry());
-            for (Expression expression : Iterables.concat(outputExpressions, orderByExpressions)) {
-                extractor.process(expression);
-            }
-            analysis.setAggregates(node, extractor.getAggregates());
+            List<FunctionCall> aggregates = ExpressionTreeUtils.extractExpressionsOfTypeUsingPredicate(
+                    Iterables.concat(outputExpressions, orderByExpressions),
+                    FunctionCall.class,
+                    getAggregateExtractorFunction(metadata.getFunctionRegistry()));
+            analysis.setAggregates(node, aggregates.stream().map(FunctionCall.class::cast).collect(toImmutableList()));
 
             // is this an aggregation query?
             if (!groupingSets.isEmpty()) {
@@ -1737,24 +1729,28 @@ class StatementAnalyzer
                 }
             }
 
-            return extractor.getAggregates();
+            return aggregates;
         }
 
         private boolean hasAggregates(QuerySpecification node)
         {
-            AggregateExtractor extractor = new AggregateExtractor(metadata.getFunctionRegistry());
+            ImmutableList.Builder<Node> toExtractBuilder = ImmutableList.builder();
 
-            node.getSelect()
-                    .getSelectItems().stream()
+            toExtractBuilder.addAll(node.getSelect().getSelectItems().stream()
                     .filter(SingleColumn.class::isInstance)
-                    .forEach(extractor::process);
+                    .collect(Collectors.toList()));
 
-            getSortItemsFromOrderBy(node.getOrderBy()).forEach(extractor::process);
+            getSortItemsFromOrderBy(node.getOrderBy()).stream().map(toExtractBuilder::add);
 
             node.getHaving()
-                    .ifPresent(extractor::process);
+                    .ifPresent(toExtractBuilder::add);
 
-            return !extractor.getAggregates().isEmpty();
+            List<FunctionCall> aggregates = ExpressionTreeUtils.extractExpressionsOfTypeUsingPredicate(
+                    toExtractBuilder.build(),
+                    FunctionCall.class,
+                    getAggregateExtractorFunction(metadata.getFunctionRegistry()));
+
+            return !aggregates.isEmpty();
         }
 
         private RelationType analyzeView(Query query, QualifiedObjectName name, Optional<String> catalog, Optional<String> schema, Optional<String> owner, Table node)
