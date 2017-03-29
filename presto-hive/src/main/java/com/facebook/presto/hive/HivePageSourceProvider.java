@@ -177,21 +177,26 @@ public class HivePageSourceProvider
             if (cursor.isPresent()) {
                 RecordCursor delegate = cursor.get();
 
-                // Need to wrap RcText and RcBinary into a wrapper, which will do the coercion for mismatch columns
-                if (doCoercion) {
-                    delegate = new HiveCoercionRecordCursor(regularColumnMappings, typeManager, delegate);
-                }
-
                 HiveRecordCursor hiveRecordCursor = new HiveRecordCursor(
                         columnMappings,
                         hiveStorageTimeZone,
                         typeManager,
                         delegate);
-                List<Type> columnTypes = hiveColumns.stream()
-                        .map(input -> typeManager.getType(input.getTypeSignature()))
-                        .collect(toList());
 
-                return Optional.of(new RecordPageSource(columnTypes, hiveRecordCursor));
+                if (doCoercion) {
+                    List<Type> columnTypes = columnMappings.stream()
+                            .map(mapping -> mapping.getCoercionFrom().map(HiveType::getTypeSignature).orElse(mapping.getHiveColumnHandle().getTypeSignature()))
+                            .map(typeManager::getType)
+                            .collect(toList());
+                    ConnectorPageSource delegatePageSource = new RecordPageSource(columnTypes, hiveRecordCursor);
+                    return Optional.of(new HivePageSource(columnMappings, hiveStorageTimeZone, typeManager, coercionPolicy, delegatePageSource));
+                }
+                else {
+                    List<Type> columnTypes = hiveColumns.stream()
+                            .map(input -> typeManager.getType(input.getTypeSignature()))
+                            .collect(toList());
+                    return Optional.of(new RecordPageSource(columnTypes, hiveRecordCursor));
+                }
             }
         }
 
