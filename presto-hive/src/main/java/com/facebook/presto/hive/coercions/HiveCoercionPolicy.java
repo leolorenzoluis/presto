@@ -16,6 +16,7 @@ package com.facebook.presto.hive.coercions;
 import com.facebook.presto.hive.HiveType;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.spi.type.DecimalType;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.VarcharType;
@@ -77,6 +78,9 @@ public class HiveCoercionPolicy
         }
         else if (fromHiveType.equals(HIVE_FLOAT) && toHiveType.equals(HIVE_DOUBLE)) {
             return Optional.of(new FloatToDoubleCoercer());
+        }
+        else if (fromType instanceof DecimalType && toType instanceof DecimalType) {
+            return Optional.of(DecimalToDecimalCoercers.createCoercer((DecimalType) fromType, (DecimalType) toType));
         }
         return Optional.empty();
     }}
